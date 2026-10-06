@@ -1,0 +1,20 @@
+{
+  "name": "@magpie-community/opencode-gaccode-auth",
+  "version": "0.3.4",
+  "description": "OpenCode provider plugin: GACCode (gaccode.com) Claude, Codex and Gemini with a site API key, quota via the site's JWT",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": ["index.mjs", "README.md", "LICENSE"],
+  "keywords": ["opencode", "opencode-plugin", "magpie", "gaccode", "claude", "codex", "gemini", "provider"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magpie-community/plugins.git",
+    "directory": "packages/gaccode"
+  },
+  "magpie": {
+    "maxConcurrency": 4,
+    "icon": "https://gaccode.com/favicon.png"
+  }
+}
