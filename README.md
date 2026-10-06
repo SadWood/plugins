@@ -13,7 +13,7 @@ subscription and makes its requests. The packages work in OpenCode and in
 | [cursor](packages/cursor) | Cursor subscriptions (Pro, Pro+, Ultra, Teams), on the API cursor-agent talks to | `cursor` |
 | [devin](packages/devin) | Devin subscription (the devin CLI's account) | `devin` |
 | [factory](packages/factory) | Factory (Droid) subscription | `factory` |
-| [gaccode](packages/gaccode) | GACCode (gaccode.com): Claude, Codex and Gemini with a site API key; quota through the site's JWT | `gaccode` |
+| [gaccode](packages/gaccode) | GACCode API key: Claude and Codex, read-only quota and opt-in experimental Gemini (local install until npm first publication) | `gaccode` |
 | [grok](packages/grok) | Grok (SuperGrok / X Premium+), through the Grok Build CLI's sign-in | `grok` |
 | [kiro](packages/kiro) | Kiro (Free, Pro, Pro+, Power), with Kiro's sign-in, kiro-cli's or the IDE's, or an API key | `kiro` |
 | [minimax](packages/minimax) | MiniMax Code (China): account credits and M Plan, with MiniMax Code's device sign-in | `minimax-code` |

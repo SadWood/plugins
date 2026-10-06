@@ -1,86 +1,259 @@
-# GACCode
+# @magpie-community/opencode-gaccode-auth
 
-在 [magpie](https://usemagpie.ai) / OpenCode 里用 [GACCode](https://gaccode.com) 的订阅额度。
+Use a [GACCode](https://gaccode.com) API key in magpie and OpenCode.
+Provider id: `gaccode`. Claude uses Anthropic Messages; Codex uses OpenAI
+Responses. Direct Gemini GenAI is an optional experiment, disabled by default.
 
-**0.3.x**：额度卡片增加 USD / 加油包（只读）；时段倍率映射为 Magpie `rate`；常见 API 错误改写为中文。
+## Install
 
-## 做什么
+From this repository, before the community package is published:
 
-- 登录：在 [API Keys](https://gaccode.com/api-keys) 拿到的 API key
-- Claude：`https://gaccode.com/claudecode/v1`（Anthropic Messages）
-- Codex：`https://gaccode.com/codex/v1`（OpenAI Responses）
-- Gemini：`https://gaccode.com/gemini/v1beta`（`@ai-sdk/google`）
-- 额度 / 用量：网站 JWT → `/api/credits/balance`、`/subscriptions`、`/credits/history`、`/usd-account`、`/credits/booster-packs`
-- 登录时可选官方域名或 `relay05` 中继
-
-若本机已有自定义供应商占用 `gaccode`，Magpie 会显示为 **`gaccode-plugin`**；provider id 仍是 `gaccode`。
-
-## 额度卡片
-
-Magpie 订阅卡只暴露 **一个**「积分」进度环（对齐 Codex：主余额 + 一个真实窗口）。账号名优先显示网站邮箱（JWT /me）。积分与每日重置写在「积分」进度条旁；Magpie「余额」行只在有 USD 或加油包时出现，避免与积分重复。
-
-## 安装（magpie）
-
-```bash
-magpie plugin add @magpie-community/opencode-gaccode-auth
-
+```sh
+magpie plugin add ./packages/gaccode
 magpie plugin login gaccode
-magpie provider test gaccode
-magpie quota
+magpie plugin --json
+magpie quota gaccode
 ```
 
-模型名形如 `gaccode/claude-sonnet-4-5`、`gaccode/gpt-5.5`、`gaccode/gemini-3-flash`。
+After the maintainer publishes the package, install it by npm name:
 
-## OpenCode
+```sh
+magpie plugin add @magpie-community/opencode-gaccode-auth
+```
+
+OpenCode, in `opencode.json`:
 
 ```json
 { "plugin": ["@magpie-community/opencode-gaccode-auth"] }
 ```
 
-然后 `opencode auth login`，选 GACCode。
+Then use `opencode auth login`. The npm form requires a published package.
+OpenCode 1.18.34 CLI loading/login and isolated main-site inference were tested;
+see the scoped results and compatibility limits below.
 
-## 登录与额度（quota）
+## Sign in
 
-推理用 API key；积分 / USD / 加油包面板要用网站登录态。`magpie plugin login gaccode` 时：
+Create a key on [API Keys](https://gaccode.com/api-keys). The API-key method
+asks for an inference endpoint (the main site or relay05) and an optional
+website JWT, then asks for the key itself. It lets the host save the key;
+there is no password sign-in method.
 
-1. **推荐：GACCode API key** — 填 key，可选粘贴网站 JWT（浏览器登录 gaccode.com → DevTools → Application → Local Storage → `token`）
-2. **API key + 网站登录** — 邮箱密码只用来换 JWT，**不保存密码**（依赖 magpie 把 API key 传给 `authorize`；若失败请用方式 1）
+magpie stores plugin credentials in
+`~/.config/magpie/plugin-auth.json` (or its XDG config directory).
+OpenCode uses its own authentication store. The website JWT, when supplied,
+is stored in the credential metadata. Obtain it from your signed-in browser
+on gaccode.com; leave it blank to skip the website details.
 
-然后：`magpie quota`，或应用里该账号的额度卡片。会显示：
+Each request reads the current account's credentials and endpoint. This
+keeps an account on relay05 when another account, or an older cached model
+list, names the main site. Model-specific endpoint overrides are honored.
+A custom endpoint reserves its matching origin/path in the fetch layer:
+all models using that same URL keep the caller's host and credentials.
+Use distinct endpoint URLs when you need different routing per model.
+A relay's availability must be checked for each API; its presence in the
+official relay selector does not guarantee every API works there.
 
-| 卡片 | 来源 |
-|------|------|
-| 积分 | `/api/credits/balance`（`balance` / `creditCap` / `refillRate` / `lastRefill`） |
-| USD | `/api/usd-account` → `account.balanceUsd`；未开通账户或无字段时标明「无 USD …」，不报错 |
-| 时段倍率 | 积分历史 `Time Multiplier(N - …)`；无记录时按工作日 9–12 / 14–18 估计 2x |
-| 加油包 | `/api/credits/booster-packs` → `boosterPacks[]`（**只读**，不自动购买/使用） |
-| 每日重置 | 工单「请求重置积分」；可选余额 ≤ 3 时自动申请 |
+## Models and configuration
 
-## 倍率 → Magpie `rate`
+Claude and Codex IDs come from their public model catalogs:
 
-Magpie 模型字段 `rate` / `rateWas` 表示「一次请求消耗的点数倍率」。与 GACCode 时段倍率同义，因此：
+| Family | SDK | Base URL |
+|---|---|---|
+| Claude | `@ai-sdk/anthropic` | `<account host>/claudecode/v1` |
+| Codex | `@ai-sdk/openai` | `<account host>/codex/v1` |
+| Experimental Gemini | `@ai-sdk/google` | `<account host>/gemini/v1beta` |
 
-- 当前倍率 `N`（如 2x）→ `rate: N`，且 `N > 1` 时 `rateWas: 1`
-- 仅写入模型元数据供选择器展示，**不改变请求路由**
+Examples: `gaccode/claude-sonnet-5-5`, `gaccode/gpt-5.5`.
+When a required catalog fails, the plugin marks the **whole** list as a
+fallback. magpie may keep its last successful complete list; this is not
+independent refresh of each family. Successful empty catalogs do not add
+bundled models. Explicit user model definitions remain listed even when
+their IDs are absent from a live catalog; this is configuration, not proof
+of availability. Duplicate IDs across protocol families cause whole-list
+fallback instead of silently choosing one protocol.
 
-若你不希望模型列表带 rate，可忽略该字段；额度卡片里仍会单独显示「时段倍率」。
+The public catalogs confirm IDs, not token limits, image input, tools or
+reasoning levels. The plugin leaves unconfirmed capabilities unknown. A
+token limit of `0` is magpie's unknown value, not a GACCode limit of zero.
+magpie can fill in limits from its own catalog or models.dev; a displayed
+limit such as `1M` is not confirmation of this GACCode endpoint's limit.
+No uniform credit price or free-model flag is inferred.
 
-## Gemini 模型列表
+Explicit model configuration is preserved in live and fallback lists:
+name, API id, limit, variants, options, headers and provider endpoint.
+If your client needs a token budget or reasoning levels, configure values
+you have checked for that model and endpoint. These are your configuration,
+not a server capability guarantee. In magpie this is the OpenCode-shaped
+`config.provider.gaccode.models` in `plugins.json`; in OpenCode it is
+`provider.gaccode.models` in `opencode.json`.
 
-- 基址：`{host}/gemini/v1beta`（与 `@ai-sdk/google` 一致）
-- 列表尝试：`GET {host}/gemini/v1beta/models`（需 API key；无凭证时常 401）
-- **失败或空列表时回退内置静态 Gemini 列表**（仍可发起对话）
-- 未发现更稳的公开列表路径；若上游改路径可再改 `geminiBase` / `listGeminiModels` / `liveModels`
+Internal evidence records keep the catalog source, check time, family and
+user-overridden fields separate from capability and authentication claims.
+Bundled fallback entries have no successful live-check timestamp, and a
+catalog response does not establish inference access. These records are
+not serialized as SDK model fields and do not store credential values.
 
-## 中文错误
+Unknown tools and reasoning capabilities use `false` in the host's boolean
+fields as an undeclared capability, not an execution-permission boundary.
+OpenCode 1.18.34 still sends and executes tools with `tool_call:false`;
+control tool execution with the host's agent permissions. After checking
+tool support for your model and endpoint, this magpie configuration declares
+that support:
 
-`auth.loader` 的 `fetch` 对常见失败（额度不足、429、401、model_not_found、无渠道等）把英文/错误码改写成短中文，并附带原 message；**状态码原样保留**，401 仍带 `X-Magpie-Sign-In: expired`。
+```json
+{
+  "config": {
+    "provider": {
+      "gaccode": {
+        "models": { "claude-sonnet-5-5": { "tool_call": true } }
+      }
+    }
+  }
+}
+```
 
-## 已知缺口
+In OpenCode, place the same `provider` object at the top level. Set `limit`,
+`reasoning` and `variants` only to values you have verified.
 
-- 本账号探测时 `/api/usd-account` 返回 `account: null`（未开通 USD 账户）；有账户时应读 `balanceUsd`
-- `/api/credits/booster-packs` 在无包时为 `boosterPacks: []`；有包时展示 `comment`/`credits`/`isUsed`/`expiresAt` 等（不调用 `…/use`）
-- 尝试过的无效路径（多为前端 HTML）：`/api/boosters`、`/api/booster-packs`、`/api/products` 等
+### OpenCode 1.18.34 compatibility
+
+The tested CLI loads this plugin and saves API-key prompts correctly.
+Mixed Anthropic/OpenAI SDKs and streaming tool-result round trips were
+exercised against both a local stand-in and GACCode. The live Claude run
+needed recovery from an upstream tool-name mismatch; see Validation below.
+
+For a newly added provider, this version uses the bundled config models and
+does not call the dynamic catalog hook. Live refresh and whole-list cache
+fallback described above apply to magpie, not this OpenCode configuration.
+Explicit model configuration remains available in OpenCode's static list.
+To hide a model in this version, use `provider.gaccode.blacklist`, for example
+`["claude-opus-4-5"]`. Its configuration schema removes a model's `disabled`
+field before this plugin receives it, so `models.<id>.disabled` cannot hide it.
+
+An output limit of `0` uses this OpenCode version's default request budget
+of 32,000; it does not send zero. Set a verified `limit.output` explicitly
+when the endpoint needs a different budget. Source inspection also shows
+that `context:0` skips automatic overflow checks; long-conversation behavior
+has not been exercised. Neither default is a verified GACCode limit.
+
+To disable tools in this tested OpenCode version, set the relevant agent's
+`permission` to `"deny"`. The local request then contains no tools. A model's
+`tool_call:false` alone does not provide that guarantee.
+
+## Read-only quota reporting (magpie)
+
+The basic state query follows GACCode's
+[official statusline plugin](https://gaccode.com/claudecode/install/statusline-plugin):
+`GET <account host>/claudecode/v1/cc-status-line` with `x-api-key`.
+When that response supplies an account email, it identifies the key's
+quota card; a website JWT's email is never substituted for it.
+
+It reads the returned credit balance/cap and current
+`timeMultiplier.value`. The card shows the reading time. Missing fields
+or failed queries show unknown/error; no clock schedule or old usage record
+is used to invent a current multiplier. The time multiplier is only one
+cost factor, so it is not copied into every model's `rate` or `rateWas`.
+
+Any credit progress bar is informational (`aside: true`). There is no
+invented hourly reset countdown or automatic account stop based on it.
+An account balance is not the same as an API key's spending allowance;
+CREDIT and USD modes may have different limits. The status endpoint's
+actual permissions and response contract still need a real test account.
+
+With an optional website JWT, the plugin also reads the main site's
+`/api/subscriptions`, `/api/me`, `/api/usd-account`,
+`/api/credits/booster-packs` and the first page of `/api/tickets`.
+Website credentials remain on gaccode.com even if inference uses a relay.
+
+Website information is labeled separately: it may belong to a different
+account from the API key. No-account, zero, empty, unreadable and unknown
+states are distinguished. Used/expired booster packs are labeled as such.
+The account editor has a single-line balance summary: USD, booster counts
+and the ticket result come first; account and subscription details follow.
+Use `magpie quota gaccode --json` to read the complete summary.
+A matching ticket means an application was found, not that credits arrived;
+no match on the first page does not prove no application was made today.
+The website's documented workflow states are shown as waiting for support,
+waiting for the user, or closed; other values are unknown. Closed does not
+mean approved, rejected or credited. Those financial outcomes are not
+inferred from the ticket state.
+
+All quota queries are GETs. This plugin never creates tickets, buys or uses
+booster packs, or changes an API key's allowance. A website JWT failure, or
+a status-query 401, leaves the inference account's sign-in state unchanged.
+Inference errors keep the upstream response body, status and headers;
+magpie's own inference-401 handling still applies.
+
+OpenCode ignores magpie's quota hook.
+
+## Experimental Gemini
+
+The [official Gemini launcher](https://gaccode.com/gemini/install) uses
+Code Assist. It does not establish compatibility with the direct GenAI
+endpoint above. Until authentication, generation, streaming, tools and
+cancellation have been checked against GACCode, enable this only to test it.
+
+In magpie, use the plugin row's Options with:
+
+```json
+{ "experimentalGemini": true }
+```
+
+In OpenCode:
+
+```json
+{ "plugin": [["@magpie-community/opencode-gaccode-auth", { "experimentalGemini": true }]] }
+```
+
+The four bundled experimental IDs are listed in GACCode's installation
+guide. Their names do not prove current account access or protocol support.
+Old cached Gemini entries cannot send managed requests with the experiment
+off; explicitly configured custom endpoints remain user configuration.
+
+## Validation and release
+
+The automated tests use fake credentials and mocked requests. Isolated
+magpie 0.1.1074/0.1.1076 sandbox checks and OpenCode 1.18.34 CLI checks used
+local stand-ins. Separately authorized main-site checks on 2026-10-06 used
+one existing key, short synthetic prompts and outputs capped at 128 tokens:
+
+- Public catalogs and API-key statusline returned the expected response shape.
+- Direct plugin-fetch checks passed text and streaming for `gpt-5.5` and
+  `claude-sonnet-5-5`; GPT-5.5 also completed tool/result and client-abort checks.
+- Real isolated magpie 0.1.1076 provider tests passed both protocols. Its
+  gateway completed both tool/result round trips with a declared `ProbeEcho`
+  tool, plus a Claude client abort after receiving streamed text.
+- Real isolated OpenCode 1.18.34 completed a GPT-5.5 streaming tool/result
+  round trip even though the upstream SSE response lacked Content-Type.
+- Claude in OpenCode returned `ProbeEcho` when `probe_echo` was declared.
+  One bounded run failed; a later run received the same first-call error,
+  then called the correct tool after error feedback and completed the result
+  round trip. This is recovery success, not reliable first-call tool behavior.
+
+The Claude endpoint also rejected forced `tool_choice` with HTTP 400,
+instructing use of `auto` or `none`. The plugin preserves upstream tool names
+and errors; it does not guess aliases or silently change tool-choice semantics.
+Unknown tool capabilities remain unconfirmed by default.
+
+These are bounded checks for two models, one key and the host versions above,
+not a guarantee for every account or model. Client abort does not establish
+server-side cancellation or stopped billing. Accurate total charges were not
+measured. Relay availability, other models, long conversations and individual
+limits/efforts remain unverified.
+
+For a new community package, the maintainer must publish its first version
+manually and configure the repository's Trusted Publisher. Add the market
+registry entry only after npm installation works.
+
+## 中文速览
+
+- API key 用于推理及基础积分查询；网站 JWT 仅为可选扩展信息。
+- 不保存网站密码，不自动提交工单、购买或使用加油包。
+- 网站余额与 API key 消费额度分别看待；额度读取失败不会停用推理。
+- relay 按账号选择；模型能力未确认时显示未知，保留用户显式配置。
+- Gemini 默认关闭，启用 `experimentalGemini` 只表示接受实验性直接 GenAI 路径。
+- 独立 Magpie/OpenCode 已完成有限主站真实链路测试。Magpie 两族工具往返及 Claude 客户端取消通过；OpenCode Codex 直接通过，Claude 有首轮工具名大小写错误后恢复成功的限制；强制工具选择不受该 Claude 端点支持。relay、其他模型及计费停止仍未证实。
+- OpenCode 1.18.34 CLI 已用本地替身验收；动态目录未调用，工具权限须通过 Agent 权限控制。
 
 ## License
 
