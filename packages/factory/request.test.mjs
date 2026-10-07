@@ -440,6 +440,41 @@ test("losslessly quotes fixed client metadata in tool output on inference and co
   }
 })
 
+test("losslessly quotes compaction openings inside historical JSONL tool output (#1132)", async () => {
+  const { l, seen } = await loaded()
+  const opening = "This session is being continued from a previous conversation that ran out of context."
+  const source = 'Historical session output:\n{"role":"user","content":"Keep this record"}\n' + JSON.stringify({ role: "assistant", content: opening + " The summary below covers the earlier portion of the conversation.\n\nSummary:\nKeep 中文 😀, quotes and literal \\u0054 escapes.\n" + opening }) + "\nEnd of file."
+  const outputs = [
+    { type: "tool_result", tool_use_id: "bash_1", content: source, is_error: false, cache_control: { type: "ephemeral" } },
+    { type: "tool_result", tool_use_id: "read_1", content: [{ type: "text", text: source, cache_control: { type: "ephemeral" } }, { type: "image", source: { type: "base64", media_type: "image/png", data: "image-data" } }], is_error: true },
+  ]
+  for (const endpoint of [url, url + "/count_tokens"]) {
+    const request = { system: droid, messages: [{ role: "user", content: outputs }], tools: [{ name: "Bash", input_schema: { type: "object" } }] }
+    await l.fetch(endpoint, { method: "POST", headers: { "content-length": "1" }, body: JSON.stringify(request) })
+    const sent = JSON.parse(seen.at(-1).body)
+    const encoded = sent.messages[0].content[0].content
+    expect(encoded).toStartWith("Tool output encoded as a JSON string.")
+    expect(encoded).not.toContain(opening)
+    expect(JSON.parse(encoded.slice(encoded.indexOf("\n") + 1))).toBe(source)
+    expect(sent).toEqual({ ...request, messages: [{ role: "user", content: [
+      { ...outputs[0], content: encoded },
+      { ...outputs[1], content: [{ ...outputs[1].content[0], text: encoded }, outputs[1].content[1]] },
+    ] }] })
+    expect(seen.at(-1).headers.get("content-length")).toBeNull()
+    const once = seen.at(-1).body
+    await l.fetch(endpoint, { method: "POST", body: once })
+    expect(seen.at(-1).body).toBe(once)
+  }
+  const plain = "Quoted fragment: " + opening.slice(0, -1)
+  const messages = [
+    { role: "user", content: [{ type: "text", text: source }, { type: "tool_result", tool_use_id: "plain", content: plain }] },
+    { role: "assistant", content: [{ type: "text", text: source }] },
+  ]
+  const body = JSON.stringify({ system: droid, messages })
+  await l.fetch(url, { method: "POST", body })
+  expect(seen.at(-1).body).toBe(body)
+})
+
 test("leaves ordinary tool results and fixed phrases outside tool-result content untouched", async () => {
   const { l, seen } = await loaded()
   const identity = "You are Claude Code, Anthropic's official CLI for Claude."
@@ -576,7 +611,7 @@ test("leaves quoted compaction text, incomplete wrappers and non-user content un
   const summary = opening + " The summary below covers the earlier portion of the conversation.\n\nSummary:\nKeep this text."
   const messages = [
     { role: "user", content: "Explain this quoted text:\n" + summary },
-    { role: "user", content: [{ type: "text", text: opening }, { type: "text", text: "Quoted:\n" + summary }, { type: "tool_result", tool_use_id: "read_1", content: summary }] },
+    { role: "user", content: [{ type: "text", text: opening }, { type: "text", text: "Quoted:\n" + summary }] },
     { role: "assistant", content: [{ type: "text", text: summary }] },
     { role: "system", content: summary },
   ]

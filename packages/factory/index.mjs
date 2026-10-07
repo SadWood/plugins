@@ -780,9 +780,10 @@ const QUOTED_TOOL_PREFIX = "Tool output encoded as a JSON string. Decode the JSO
 function quotedToolText(text) {
   if (![...CLAUDE_IDENTITIES].some((identity) => text.includes(identity)) &&
       !text.includes("You have been invoked in the following environment:") &&
-      !text.includes("x-anthropic-billing-header: cc_version=")) return text
+      !text.includes("x-anthropic-billing-header: cc_version=") &&
+      !text.includes(COMPACT_OPENING)) return text
   let encoded = JSON.stringify(text)
-  for (const phrase of ["You are", "You have", "x-anthropic-billing-header", "system-reminder"]) {
+  for (const phrase of ["You are", "You have", "x-anthropic-billing-header", "system-reminder", COMPACT_OPENING]) {
     encoded = encoded.replaceAll(phrase, "\\u" + phrase.charCodeAt(0).toString(16).padStart(4, "0") + phrase.slice(1))
   }
   return QUOTED_TOOL_PREFIX + encoded

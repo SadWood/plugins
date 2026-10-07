@@ -141,7 +141,8 @@ and custom skill descriptions while adapting the known built-in description.
 
 Factory can also refuse fixed client phrases quoted in tool results, such as
 the identity/environment definitions printed when inspecting this plugin's
-source. Those text results are represented as JSON strings with explicit
+source, or the compaction opening embedded in a historical session JSONL
+record. Those text results are represented as JSON strings with explicit
 decoding instructions and Unicode escapes for the fixed phrases. Decoding
 the string recovers the exact original output, including quotes, backslashes
 and Unicode; the plugin does not delete the output or replace its identities
