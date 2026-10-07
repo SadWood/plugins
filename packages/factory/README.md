@@ -93,6 +93,8 @@ instructions, environment values, tool definitions, images and reasoning
 options. Ordinary Droid requests remain unchanged, and OpenAI routes keep
 their existing request adapter. Quoted fixed metadata in tool results is
 handled as described below.
+The fixed Claude identity is recognized as a complete first line too when
+magpie joins it with the following system instructions into one text block.
 
 For the built-in `update-config` skill, the adapter changes only the known
 self-reference "not Claude" to "not the assistant" inside a complete
@@ -110,6 +112,20 @@ adapted too, including accumulated switches when resuming a conversation.
 Token budgets, permission instructions and conversation history are preserved.
 The same model-update adaptation covers updates that start with the complete
 generated `# Environment update` block after a working-directory change.
+
+Claude Code's generated compaction summaries also have a fixed opening
+that Factory refuses. For a complete summary header, the adapter rephrases
+only its first sentence in user messages, including string and text-block
+content. The summary body and continuation instructions stay verbatim.
+Complete generated reminders for restored Read calls and omitted files are
+adapted too. Read arguments, file paths and the separate file-content blocks
+are preserved; quoted or incomplete reminders are left alone.
+Claude Code can also combine reminders into a token-prefixed `system` turn
+without the reminder wrappers. The adapter handles the known metadata
+paragraphs in that form, including skill-list updates, while retaining
+numbered file contents, token markers and SessionStart hook output.
+The same adaptation applies when a translating gateway folds that complete
+token-prefixed block into a user message.
 
 Factory can also refuse fixed client phrases quoted in tool results, such as
 the identity/environment definitions printed when inspecting this plugin's

@@ -652,13 +652,42 @@ const SYSTEM_TOKEN_CONTEXT = /(?:^|\n\n)<total_tokens>\d+ tokens left<\/total_to
 // is left as it is.
 const HOOK_OUTPUT = /^SessionStart:[^\n]* hook success:/
 const HOOK_CONTEXT = "\n# Environment\nYou have been invoked in the following environment:"
+const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n/
 function systemContext(text) {
+  if (SYSTEM_TOKEN_OPENING.test(text)) return announcedContext(text)
   if (HOOK_OUTPUT.test(text)) {
     const at = text.indexOf(HOOK_CONTEXT)
     return at < 0 ? text : text.slice(0, at + 1) + generatedContext(text.slice(at + 1))
   }
   return generatedContext(text)
 }
+
+// Claude Code also announces several reminders as one system turn, with
+// a token marker first and no system-reminder wrappers. Only known metadata
+// paragraphs change; numbered file contents and the hook's own output stay.
+function announcedContext(text) {
+  const parts = text.split("\n\n")
+  const open = "<system-reminder>\n", close = "\n</system-reminder>"
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i]
+    if (HOOK_OUTPUT.test(part)) break
+    const result = part.indexOf("\nResult of calling the Read tool:")
+    const heading = result < 0 ? part : part.slice(0, result)
+    const wrapped = open + heading + close
+    const compacted = compactContext(wrapped)
+    if (compacted !== wrapped) {
+      parts[i] = compacted.slice(open.length, -close.length) + (result < 0 ? "" : part.slice(result))
+    } else if (SYSTEM_ENV_CONTEXT.test(part + "\n")) {
+      parts[i] = generatedContext(part + "\n").slice(0, -1)
+    } else if (SYSTEM_MODEL_UPDATE.test(part)) {
+      parts[i] = systemModelLine(part)
+    } else if (parts[i - 1] === "The following skills are available for use with the Skill tool:") {
+      parts[i] = ("\n" + part).replace("\n" + CONFIG_SKILL_METADATA, "\n" + CONFIG_SKILL_COMPAT).slice(1)
+    }
+  }
+  return parts.join("\n\n")
+}
+
 function generatedContext(text) {
   const environment = SYSTEM_ENV_CONTEXT.test(text)
   if (!environment && !((SYSTEM_MODEL_UPDATE.test(text) || SYSTEM_ENV_UPDATE.test(text)) && SYSTEM_TOKEN_CONTEXT.test(text))) return text
@@ -694,6 +723,30 @@ function systemModelLine(text) {
 // Factory refuses; only that phrase in the generated reminder changes.
 const INSTRUCTIONS_REMINDER = "<system-reminder>\nCodebase and user instructions are shown below"
 const GLOBAL_INSTRUCTIONS = "(user's private global instructions for all projects)"
+
+// Factory returns 403 for Claude Code's fixed compaction opening, even
+// without tools or other history. Match the generated summary header;
+// keep the summary and continuation instructions after it verbatim. File
+// reminders restored after compaction need the same narrow adaptation;
+// their paths, read arguments and separate file-content blocks stay intact.
+const COMPACT_OPENING = "This session is being continued from a previous conversation that ran out of context."
+const COMPACT_HEADER = COMPACT_OPENING + " The summary below covers the earlier portion of the conversation.\n\nSummary:\n"
+const COMPACT_READ = /^<system-reminder>\nCalled the Read tool with the following input: (\{[^\n]*\})\n<\/system-reminder>$/
+const COMPACT_FILE = /^<system-reminder>\nNote: ([^\n]+) was read before the last conversation was summarized, but the contents are too large to include\. Use Read tool if you need to access it\.\n<\/system-reminder>$/
+function compactContext(text) {
+  // A translating gateway can fold an announced system turn into user text.
+  if (SYSTEM_TOKEN_OPENING.test(text)) return announcedContext(text)
+  if (text.startsWith(COMPACT_HEADER)) return "Earlier conversation context is summarized below." + text.slice(COMPACT_OPENING.length)
+  const read = text.match(COMPACT_READ)
+  if (read) {
+    try {
+      if (typeof JSON.parse(read[1])?.file_path === "string") return text.replace("Called the Read tool with the following input:", "Previously read file with these arguments:")
+    } catch {}
+  }
+  const file = text.match(COMPACT_FILE)
+  if (file) return "<system-reminder>\nPreviously read file: " + file[1] + ". Its contents were omitted from the conversation summary because of length. Use Read tool if you need to access it.\n</system-reminder>"
+  return text
+}
 
 // Factory also refuses these fixed client phrases when they are quoted in
 // tool output, e.g. while reading this adapter's source. Keep the original
@@ -744,11 +797,12 @@ function anthropicBody(body) {
       changed = true
       continue
     }
-    if (block?.type === "text" && CLAUDE_IDENTITIES.has(block.text)) {
-      block.text = DROID_LINE
-      changed = true
-    } else if (block?.type === "text") {
-      const adapted = clientOpening(systemModelLine(block.text))
+    if (block?.type === "text") {
+      // The gateway may join the identity and instructions into one block.
+      // Only the complete fixed first line is metadata; keep the rest.
+      const identity = [...CLAUDE_IDENTITIES].find((line) => block.text === line || block.text.startsWith(line + "\n"))
+      const text = identity ? DROID_LINE + block.text.slice(identity.length) : block.text
+      const adapted = clientOpening(systemModelLine(text))
       if (adapted !== block.text) {
         block.text = adapted
         changed = true
@@ -797,7 +851,16 @@ function anthropicBody(body) {
       }
       continue
     }
-    if (message?.role !== "user" || !Array.isArray(message.content)) continue
+    if (message?.role !== "user") continue
+    if (typeof message.content === "string") {
+      const adapted = compactContext(message.content)
+      if (adapted !== message.content) {
+        message.content = adapted
+        changed = true
+      }
+      continue
+    }
+    if (!Array.isArray(message.content)) continue
     for (const block of message.content) {
       if (block?.type === "tool_result") {
         if (typeof block.content === "string") {
@@ -819,7 +882,11 @@ function anthropicBody(body) {
         continue
       }
       if (block?.type !== "text" || typeof block.text !== "string") continue
-      if (block.text.startsWith(INSTRUCTIONS_REMINDER) && block.text.includes(GLOBAL_INSTRUCTIONS)) {
+      const compacted = compactContext(block.text)
+      if (compacted !== block.text) {
+        block.text = compacted
+        changed = true
+      } else if (block.text.startsWith(INSTRUCTIONS_REMINDER) && block.text.includes(GLOBAL_INSTRUCTIONS)) {
         block.text = block.text.replaceAll(GLOBAL_INSTRUCTIONS, "(global instructions)")
         changed = true
       } else if (HOOK_OUTPUT.test(block.text) || SYSTEM_ENV_CONTEXT.test(block.text)) {

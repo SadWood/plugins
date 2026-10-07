@@ -493,3 +493,166 @@ test("adapts the model line inside Claude Desktop's system prompt", async () => 
   await l.fetch(url, { method: "POST", body: JSON.stringify({ system: [{ type: "text", text: "You are a Claude agent, built on Anthropic's Claude Agent SDK." }, { type: "text", text: prompt }], messages: [{ role: "user", content: "hi" }] }) })
   expect(JSON.parse(seen.at(-1).body).system).toEqual([{ type: "text", text: droid }, { type: "text", text: prompt.replace("You are powered by the model named", "Current model name:").replace("The exact model ID is", "Model ID:") }])
 })
+
+test("adapts Claude Code compacted summaries in string and text-block messages on inference and counting", async () => {
+  const { l, seen } = await loaded()
+  const opening = "This session is being continued from a previous conversation that ran out of context."
+  const summary = opening + " The summary below covers the earlier portion of the conversation.\n\nSummary:\nKeep the user's decisions, paths and code exactly: 中文, /tmp/project, `x = 1`.\nContinue without repeating completed work."
+  const adapted = "Earlier conversation context is summarized below." + summary.slice(opening.length)
+  for (const endpoint of [url, url + "/count_tokens"]) {
+    for (const content of [summary, [{ type: "text", text: summary, cache_control: { type: "ephemeral" } }, { type: "text", text: "Continue." }]]) {
+      const request = { model: "claude-opus-5-5", system: droid, messages: [{ role: "user", content }], max_tokens: 16, stream: true }
+      await l.fetch(endpoint, { method: "POST", headers: { "content-length": "1" }, body: JSON.stringify(request) })
+      const expected = typeof content === "string" ? adapted : [{ ...content[0], text: adapted }, content[1]]
+      expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [{ role: "user", content: expected }] })
+      expect(seen.at(-1).headers.get("content-length")).toBeNull()
+      const once = seen.at(-1).body
+      await l.fetch(endpoint, { method: "POST", body: once })
+      expect(seen.at(-1).body).toBe(once)
+    }
+  }
+})
+
+test("leaves quoted compaction text, incomplete wrappers and non-user content untouched", async () => {
+  const { l, seen } = await loaded()
+  const opening = "This session is being continued from a previous conversation that ran out of context."
+  const summary = opening + " The summary below covers the earlier portion of the conversation.\n\nSummary:\nKeep this text."
+  const messages = [
+    { role: "user", content: "Explain this quoted text:\n" + summary },
+    { role: "user", content: [{ type: "text", text: opening }, { type: "text", text: "Quoted:\n" + summary }, { type: "tool_result", tool_use_id: "read_1", content: summary }] },
+    { role: "assistant", content: [{ type: "text", text: summary }] },
+    { role: "system", content: summary },
+  ]
+  const body = JSON.stringify({ system: droid, messages })
+  await l.fetch(url, { method: "POST", body })
+  expect(seen[0].body).toBe(body)
+})
+
+test("adapts generated compacted file reminders without changing paths, read arguments or file contents", async () => {
+  const { l, seen } = await loaded()
+  const args = '{"file_path":"/tmp/示例 file.txt","offset":10,"limit":20}'
+  const read = "<system-reminder>\nCalled the Read tool with the following input: " + args + "\n</system-reminder>"
+  const reference = "<system-reminder>\nNote: /tmp/示例 file.txt was read before the last conversation was summarized, but the contents are too large to include. Use Read tool if you need to access it.\n</system-reminder>"
+  const result = "<system-reminder>\nResult of calling the Read tool: 1\tKeep the source verbatim.\n</system-reminder>"
+  const expected = [
+    read.replace("Called the Read tool with the following input:", "Previously read file with these arguments:"),
+    "<system-reminder>\nPreviously read file: /tmp/示例 file.txt. Its contents were omitted from the conversation summary because of length. Use Read tool if you need to access it.\n</system-reminder>",
+  ]
+  for (const endpoint of [url, url + "/count_tokens"]) {
+    for (const [i, text] of [read, reference].entries()) {
+      for (const content of [text, [{ type: "text", text, cache_control: { type: "ephemeral" } }, { type: "text", text: result }]]) {
+        const request = { system: droid, messages: [{ role: "user", content }], stream: true }
+        await l.fetch(endpoint, { method: "POST", headers: { "content-length": "1" }, body: JSON.stringify(request) })
+        const adapted = typeof content === "string" ? expected[i] : [{ ...content[0], text: expected[i] }, content[1]]
+        expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [{ role: "user", content: adapted }] })
+        expect(seen.at(-1).headers.get("content-length")).toBeNull()
+        const once = seen.at(-1).body
+        await l.fetch(endpoint, { method: "POST", body: once })
+        expect(seen.at(-1).body).toBe(once)
+      }
+    }
+  }
+})
+
+test("preserves quoted, incomplete and unrelated file reminders", async () => {
+  const { l, seen } = await loaded()
+  const read = '<system-reminder>\nCalled the Read tool with the following input: {"file_path":"/tmp/file.txt"}\n</system-reminder>'
+  const reference = "<system-reminder>\nNote: /tmp/file.txt was read before the last conversation was summarized, but the contents are too large to include. Use Read tool if you need to access it.\n</system-reminder>"
+  const texts = [read, reference].flatMap((text) => ["Explain:\n" + text, text + "\nKeep this quote.", text.replace("</system-reminder>", "")])
+  texts.push(read.replace('"file_path"', '"query"'), read.replace('{"file_path":"/tmp/file.txt"}', 'not JSON'))
+  const messages = [
+    ...texts.map((content) => ({ role: "user", content })),
+    { role: "user", content: texts.map((text) => ({ type: "text", text })) },
+    { role: "assistant", content: [{ type: "text", text: read }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "read_1", content: reference }] },
+  ]
+  const body = JSON.stringify({ system: droid, messages })
+  await l.fetch(url, { method: "POST", body })
+  expect(seen[0].body).toBe(body)
+})
+
+test("adapts the fixed Claude identity when the gateway joins it with system instructions", async () => {
+  const { l, seen } = await loaded()
+  const identities = [
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+  ]
+  const instructions = "\nKeep these instructions verbatim.\nPaths: /tmp/示例.\nDo not change the user's decisions."
+  for (const identity of identities) {
+    const block = { type: "text", text: identity + instructions, cache_control: { type: "ephemeral" } }
+    for (const system of [block.text, [block]]) {
+      const body = JSON.stringify({ system, messages: [{ role: "user", content: "OK" }] })
+      await l.fetch(url, { method: "POST", body })
+      const expected = typeof system === "string" ? { type: "text", text: droid + instructions } : { ...block, text: droid + instructions }
+      expect(JSON.parse(seen.at(-1).body).system).toEqual([expected])
+      const once = seen.at(-1).body
+      await l.fetch(url, { method: "POST", body: once })
+      expect(seen.at(-1).body).toBe(once)
+    }
+  }
+})
+
+test("preserves Claude identity quotations inside system instructions and incomplete first lines", async () => {
+  const { l, seen } = await loaded()
+  const identity = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+  for (const text of ["Quoted identity:\n" + identity, identity + " Explain this quote.", identity.slice(0, -1)]) {
+    const body = JSON.stringify({ system: [{ type: "text", text: droid }, { type: "text", text }], messages: [{ role: "user", content: "OK" }] })
+    await l.fetch(url, { method: "POST", body })
+    expect(seen.at(-1).body).toBe(body)
+  }
+})
+
+test("adapts token-prefixed runtime bundles as system turns or folded user text", async () => {
+  const { l, seen } = await loaded()
+  const token = "<total_tokens>14831568 tokens left</total_tokens>"
+  const args = '{"file_path":"/tmp/示例.ts","limit":20}'
+  const file = 'Result of calling the Read tool:\n1\t// Keep this source exactly.\n2\tconst text = "You are powered by the model named X."\n3\t// Called the Read tool with the following input: {}'
+  const read = "Called the Read tool with the following input: " + args
+  const reference = "Note: /tmp/large.ts was read before the last conversation was summarized, but the contents are too large to include. Use Read tool if you need to access it."
+  const environment = "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /tmp/project\n - Platform: darwin"
+  const model = "You are powered by the model named Sonnet 5.5. The exact model ID is group/auto-claude-sonnet-5-5. Assistant knowledge cutoff is June 2026."
+  const skillHeader = "The following skills are available for use with the Skill tool:"
+  const skills = "- custom: Keep this user's skill.\n" + configSkill
+  const hook = "SessionStart:compact hook success: Keep my hook output.\n\n" + model + "\n\n" + reference
+  const text = [token, read + "\n" + file, reference, environment, model, skillHeader, skills, hook].join("\n\n")
+  const expected = [token, "Previously read file with these arguments: " + args + "\n" + file,
+    "Previously read file: /tmp/large.ts. Its contents were omitted from the conversation summary because of length. Use Read tool if you need to access it.",
+    "# Runtime context\nThe session environment is: \n - Primary working directory: /tmp/project\n - Platform: darwin",
+    "Current model name: Sonnet 5.5. Model ID: group/auto-claude-sonnet-5-5. Model knowledge cutoff: June 2026.",
+    skillHeader, skills.replace("not Claude", "not the assistant"), hook].join("\n\n")
+  const skillOnly = [token, skillHeader, skills, "## Exited Auto Mode", token].join("\n\n")
+  for (const endpoint of [url, url + "/count_tokens"]) {
+    for (const [input, output] of [[text, expected], [skillOnly, skillOnly.replace("not Claude", "not the assistant")]]) {
+      for (const content of [input, [{ type: "text", text: input, cache_control: { type: "ephemeral" } }]]) {
+        for (const role of ["system", "user"]) {
+          const request = { system: droid, messages: [{ role, content }, { role: "user", content: "OK" }] }
+          await l.fetch(endpoint, { method: "POST", body: JSON.stringify(request) })
+          const adapted = typeof content === "string" ? output : [{ ...content[0], text: output }]
+          expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [{ role, content: adapted }, request.messages[1]] })
+          const once = seen.at(-1).body
+          await l.fetch(endpoint, { method: "POST", body: once })
+          expect(seen.at(-1).body).toBe(once)
+        }
+      }
+    }
+  }
+})
+
+test("preserves quoted or incomplete unwrapped bundles and assistant content", async () => {
+  const { l, seen } = await loaded()
+  const text = '<total_tokens>12345 tokens left</total_tokens>\n\nCalled the Read tool with the following input: {"file_path":"/tmp/file"}\nResult of calling the Read tool:\n1\tKeep this.'
+  const contents = ["Explain:\n" + text, text.replace("12345", "unknown"), text.replace("</total_tokens>", ""), text.replace(/^.*?\n\n/, "")]
+  for (const content of contents) {
+    const body = JSON.stringify({ system: droid, messages: [{ role: "system", content }] })
+    await l.fetch(url, { method: "POST", body })
+    expect(seen.at(-1).body).toBe(body)
+  }
+  for (const role of ["assistant"]) {
+    for (const content of [text, [{ type: "text", text }]]) {
+      const body = JSON.stringify({ system: droid, messages: [{ role, content }] })
+      await l.fetch(url, { method: "POST", body })
+      expect(seen.at(-1).body).toBe(body)
+    }
+  }
+})
