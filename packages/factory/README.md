@@ -134,6 +134,10 @@ Standalone skill updates can instead start with the generated skill-list
 header and end with a token marker, for example when leaving auto mode.
 That complete form receives the same adaptation while retaining the skill
 descriptions and mode-change instructions.
+When runtime notifications precede the skill update, the adapter recognizes
+the complete skill-header and bullet-list paragraphs inside a token-terminated
+bundle. It preserves MCP connection errors, other notifications, mode updates
+and custom skill descriptions while adapting the known built-in description.
 
 Factory can also refuse fixed client phrases quoted in tool results, such as
 the identity/environment definitions printed when inspecting this plugin's

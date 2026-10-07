@@ -657,12 +657,31 @@ const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n
 // auto mode). Require the generated list opening and a complete token tail.
 const SYSTEM_SKILL_CONTEXT = /^The following skills are available for use with the Skill tool:\n\n- [\s\S]*\n\n<total_tokens>\d+ tokens left<\/total_tokens>$/
 function systemContext(text) {
+  text = announcedSkills(text)
   if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
   if (HOOK_OUTPUT.test(text) || text.startsWith(DEFERRED_TOOLS_OPENING)) {
     const at = text.indexOf(HOOK_CONTEXT)
     return at < 0 ? text : text.slice(0, at + 1) + generatedContext(text.slice(at + 1))
   }
   return generatedContext(text)
+}
+
+// Runtime notifications can precede a skill update, so the message opening
+// is not a reliable discriminator. Require a complete token-terminated
+// bundle, an exact skill header and a bullet-list paragraph. Only the known
+// built-in description changes; notifications and hook-owned output stay.
+function announcedSkills(text) {
+  if (!/(?:^|\n\n)<total_tokens>\d+ tokens left<\/total_tokens>$/.test(text)) return text
+  const parts = text.split("\n\n")
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (HOOK_OUTPUT.test(parts[i])) break
+    if (parts[i] !== "The following skills are available for use with the Skill tool:") continue
+    const list = parts[i + 1]
+    // Skill descriptions can contain continuation lines.
+    if (!list.startsWith("- ")) continue
+    parts[i + 1] = ("\n" + list).replace("\n" + CONFIG_SKILL_METADATA, "\n" + CONFIG_SKILL_COMPAT).slice(1)
+  }
+  return parts.join("\n\n")
 }
 
 // Claude Code also announces several reminders as one system turn, with
@@ -749,7 +768,7 @@ function compactContext(text) {
   }
   const file = text.match(COMPACT_FILE)
   if (file) return "<system-reminder>\nPreviously read file: " + file[1] + ". Its contents were omitted from the conversation summary because of length. Use Read tool if you need to access it.\n</system-reminder>"
-  return text
+  return announcedSkills(text)
 }
 
 // Factory also refuses these fixed client phrases when they are quoted in

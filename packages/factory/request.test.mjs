@@ -737,6 +737,69 @@ test("preserves quoted and incomplete standalone skill updates and tool output",
   expect(seen.at(-1).body).toBe(body)
 })
 
+test("adapts complete skill paragraphs after runtime notifications and repeated mode updates", async () => {
+  const { l, seen } = await loaded()
+  const header = "The following skills are available for use with the Skill tool:"
+  const list = "- custom: Keep not Claude in my description.\nTRIGGER: Keep this continuation line.\nSKIP: Keep this line too.\n" + configSkill
+  const token = "<total_tokens>15000000 tokens left</total_tokens>"
+  const notices = [
+    'The following MCP servers are configured but failed to connect — their tools (typically named mcp__<server>__*) are unavailable for this session:\nexample (400): "Authorization header is badly formatted"\n\nTreat this as a connection failure, not a missing capability.',
+    "Runtime notification: tools changed.\nKeep this notification exactly.",
+    'The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:\nRead\nmcp__example__query',
+  ]
+  const modes = ["## Exited Auto Mode", "Resume using dedicated tools.", token, "While bypass permissions mode is active:", "Keep these tool-choice instructions verbatim.", token].join("\n\n")
+  for (const notice of notices) {
+    const text = [notice, header, list, modes, header, list, token].join("\n\n")
+    const expected = text.replaceAll(configSkill, configSkill.replace("not Claude", "not the assistant"))
+    for (const endpoint of [url, url + "/count_tokens"]) {
+      for (const role of ["system", "user"]) {
+        for (const content of [text, [{ type: "text", text, cache_control: { type: "ephemeral" } }]]) {
+          const request = { system: droid, messages: [{ role: "user", content: "OK" }, { role, content }] }
+          await l.fetch(endpoint, { method: "POST", body: JSON.stringify(request) })
+          const output = typeof content === "string" ? expected : [{ ...content[0], text: expected }]
+          expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [request.messages[0], { role, content: output }] })
+          const once = seen.at(-1).body
+          await l.fetch(endpoint, { method: "POST", body: once })
+          expect(seen.at(-1).body).toBe(once)
+        }
+      }
+    }
+  }
+})
+
+test("preserves incomplete skill paragraphs, quoted headers and hook-owned listings", async () => {
+  const { l, seen } = await loaded()
+  const header = "The following skills are available for use with the Skill tool:"
+  const token = "<total_tokens>15000000 tokens left</total_tokens>"
+  const listing = header + "\n\n" + configSkill
+  const text = "Runtime notification.\n\n" + listing + "\n\n" + token
+  const values = [
+    text.replace(token, "<total_tokens>unknown tokens left</total_tokens>"),
+    text.replace("</total_tokens>", ""),
+    text + "\nExplain this example.",
+    text.replace(header, "Explain this quoted header:\n" + header),
+    text.replace(header, "> " + header),
+    text.replace(configSkill, "Keep this ordinary paragraph.\n" + configSkill),
+    "Runtime notification.\n\n```text\n" + listing + "\n```\n\n" + token,
+    "Runtime notification.\n\nSubagentStart hook additional context: Keep hook output.\n\n" + listing + "\n\n" + token,
+  ]
+  for (const value of values) {
+    for (const role of ["system", "user"]) {
+      for (const content of [value, [{ type: "text", text: value }]]) {
+        const body = JSON.stringify({ system: droid, messages: [{ role, content }] })
+        await l.fetch(url, { method: "POST", body })
+        expect(seen.at(-1).body).toBe(body)
+      }
+    }
+  }
+  const body = JSON.stringify({ system: droid, messages: [
+    { role: "assistant", content: [{ type: "text", text }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: text }] },
+  ] })
+  await l.fetch(url, { method: "POST", body })
+  expect(seen.at(-1).body).toBe(body)
+})
+
 test("preserves quoted or incomplete unwrapped bundles and assistant content", async () => {
   const { l, seen } = await loaded()
   const text = '<total_tokens>12345 tokens left</total_tokens>\n\nCalled the Read tool with the following input: {"file_path":"/tmp/file"}\nResult of calling the Read tool:\n1\tKeep this.'
