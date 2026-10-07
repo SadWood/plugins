@@ -646,11 +646,11 @@ const SYSTEM_MODEL_CONTEXT = /(^|\n\n)You are powered by the model (?:named )?[^
 const SYSTEM_MODEL_UPDATE = /^You are powered by the model (?:named )?[^\n<>]+\.(?=\n\n|$)/
 const SYSTEM_ENV_UPDATE = /^# Environment update\n(?: {1,2}- [^\n]*\n)+(?=\n|$)/
 const SYSTEM_TOKEN_CONTEXT = /(?:^|\n\n)<total_tokens>\d+ tokens left<\/total_tokens>(?=\n\n|$)/
-// A SessionStart hook's output comes ahead of the generated context in the
-// same message (Claude Code 2.1.288 with a hook installed, #634): the
-// context after it is adapted as it would be on its own, the hook's output
-// is left as it is.
-const HOOK_OUTPUT = /^SessionStart:[^\n]* hook success:/
+// Startup hooks and deferred-tool announcements can precede the generated
+// context in the same message (#634 and subagent startup). Adapt only the
+// environment suffix; keep the hook output and tool announcement verbatim.
+const HOOK_OUTPUT = /^(?:SessionStart|SubagentStart)(?::[^\n]* hook success:| hook additional context:)/
+const DEFERRED_TOOLS_OPENING = 'The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:\n'
 const HOOK_CONTEXT = "\n# Environment\nYou have been invoked in the following environment:"
 const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n/
 // Skill updates can omit the opening token marker (for example on leaving
@@ -658,7 +658,7 @@ const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n
 const SYSTEM_SKILL_CONTEXT = /^The following skills are available for use with the Skill tool:\n\n- [\s\S]*\n\n<total_tokens>\d+ tokens left<\/total_tokens>$/
 function systemContext(text) {
   if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
-  if (HOOK_OUTPUT.test(text)) {
+  if (HOOK_OUTPUT.test(text) || text.startsWith(DEFERRED_TOOLS_OPENING)) {
     const at = text.indexOf(HOOK_CONTEXT)
     return at < 0 ? text : text.slice(0, at + 1) + generatedContext(text.slice(at + 1))
   }
@@ -739,6 +739,7 @@ const COMPACT_FILE = /^<system-reminder>\nNote: ([^\n]+) was read before the las
 function compactContext(text) {
   // A translating gateway can fold an announced system turn into user text.
   if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
+  if (HOOK_OUTPUT.test(text) || text.startsWith(DEFERRED_TOOLS_OPENING)) return systemContext(text)
   if (text.startsWith(COMPACT_HEADER)) return "Earlier conversation context is summarized below." + text.slice(COMPACT_OPENING.length)
   const read = text.match(COMPACT_READ)
   if (read) {

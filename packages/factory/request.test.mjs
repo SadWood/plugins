@@ -477,6 +477,63 @@ test("adapts runtime context after a SessionStart hook's output, as a system mes
   expect(seen.at(-1).body).toBe(body)
 })
 
+test("adapts runtime metadata after subagent hooks and deferred tools without changing their content", async () => {
+  const { l, seen } = await loaded()
+  const tools = 'The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:\nRead\nTaskStop\nmcp__example__query'
+  const hookBody = "Keep these hook instructions.\n\nYou are powered by the model named Hook example.\n\n" + configSkill
+  const context = "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /tmp/project\n - Platform: darwin\n\nYou are powered by the model named Sonnet 5.5. The exact model ID is factory/claude-sonnet-5-5.\n\nThe following skills are available for use with the Skill tool:\n\n" + configSkill + "\n- custom: Keep not Claude in this custom description.\n\n<total_tokens>15000000 tokens left</total_tokens>"
+  const adapted = context.replace("# Environment", "# Runtime context")
+    .replace("You have been invoked in the following environment:", "The session environment is:")
+    .replace("You are powered by the model named", "Current model name:")
+    .replace("The exact model ID is", "Model ID:")
+    .replace("not Claude", "not the assistant")
+  const prefixes = [tools,
+    "SubagentStart hook additional context: " + hookBody,
+    "SubagentStart hook additional context: " + hookBody + "\n\n" + tools,
+    "SubagentStart:general-purpose hook success: " + hookBody + "\n\n" + tools,
+    "SessionStart hook additional context: " + hookBody + "\n\n" + tools]
+  for (const prefix of prefixes) {
+    const text = prefix + "\n\n" + context
+    for (const endpoint of [url, url + "/count_tokens"]) {
+      for (const role of ["system", "user"]) {
+        for (const content of [text, [{ type: "text", text, cache_control: { type: "ephemeral" } }]]) {
+          const request = { system: droid, messages: [{ role: "user", content: "OK" }, { role, content }] }
+          await l.fetch(endpoint, { method: "POST", body: JSON.stringify(request) })
+          const expected = prefix + "\n\n" + adapted
+          const output = typeof content === "string" ? expected : [{ ...content[0], text: expected }]
+          expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [request.messages[0], { role, content: output }] })
+          const once = seen.at(-1).body
+          await l.fetch(endpoint, { method: "POST", body: once })
+          expect(seen.at(-1).body).toBe(once)
+        }
+      }
+    }
+  }
+})
+
+test("preserves quoted subagent context, incomplete environments and assistant content", async () => {
+  const { l, seen } = await loaded()
+  const hook = "SubagentStart hook additional context: Keep my instructions."
+  const text = hook + "\n\n# Environment\nYou have been invoked in the following environment:\n - Platform: darwin\n\nYou are powered by the model named Sonnet 5.5."
+  for (const value of [hook, "Explain this:\n" + text, text.replace("SubagentStart", "CustomEvent"), text.replace(" - Platform", "Platform"), hook + "\n\nYou are powered by the model named Example."]) {
+    for (const role of ["system", "user"]) {
+      for (const content of [value, [{ type: "text", text: value }]]) {
+        const body = JSON.stringify({ system: droid, messages: [{ role, content }] })
+        await l.fetch(url, { method: "POST", body })
+        expect(seen.at(-1).body).toBe(body)
+      }
+    }
+  }
+  const tokenBundle = "<total_tokens>15000000 tokens left</total_tokens>\n\n" + text
+  const messages = [{ role: "assistant", content: text }, { role: "assistant", content: [{ type: "text", text }] }]
+  const body = JSON.stringify({ system: droid, messages })
+  await l.fetch(url, { method: "POST", body })
+  expect(seen.at(-1).body).toBe(body)
+  // Runtime-looking lines inside a hook are output, not further metadata.
+  await l.fetch(url, { method: "POST", body: JSON.stringify({ system: droid, messages: [{ role: "system", content: tokenBundle }] }) })
+  expect(JSON.parse(seen.at(-1).body).messages[0].content).toBe(tokenBundle)
+})
+
 test("renames the global CLAUDE.md in the instructions reminder only", async () => {
   const { l, seen } = await loaded()
   const reminder = "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions.\n\nContents of /home/u/.claude/CLAUDE.md (user's private global instructions for all projects):\n\nUse tabs.\n</system-reminder>"

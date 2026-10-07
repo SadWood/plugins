@@ -105,6 +105,10 @@ Claude 5 can send runtime metadata in string-content `system` messages
 instead of user-message reminders. The plugin adapts the known environment,
 model and configuration-skill metadata in that shape too, preserving the
 message role, environment values and session instructions.
+Startup hooks (`SessionStart` or `SubagentStart`, including additional
+context) and deferred-tool announcements may precede that environment
+block. The adapter preserves the prefix verbatim and adapts the generated
+runtime context after it, including when folded into user text.
 After `/model` switches, Claude Code can send model-only system updates
 without the initial environment paragraph. Updates beginning with the known
 model paragraph and containing complete generated token metadata are
