@@ -126,6 +126,10 @@ paragraphs in that form, including skill-list updates, while retaining
 numbered file contents, token markers and SessionStart hook output.
 The same adaptation applies when a translating gateway folds that complete
 token-prefixed block into a user message.
+Standalone skill updates can instead start with the generated skill-list
+header and end with a token marker, for example when leaving auto mode.
+That complete form receives the same adaptation while retaining the skill
+descriptions and mode-change instructions.
 
 Factory can also refuse fixed client phrases quoted in tool results, such as
 the identity/environment definitions printed when inspecting this plugin's

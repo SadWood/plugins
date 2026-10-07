@@ -653,8 +653,11 @@ const SYSTEM_TOKEN_CONTEXT = /(?:^|\n\n)<total_tokens>\d+ tokens left<\/total_to
 const HOOK_OUTPUT = /^SessionStart:[^\n]* hook success:/
 const HOOK_CONTEXT = "\n# Environment\nYou have been invoked in the following environment:"
 const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n/
+// Skill updates can omit the opening token marker (for example on leaving
+// auto mode). Require the generated list opening and a complete token tail.
+const SYSTEM_SKILL_CONTEXT = /^The following skills are available for use with the Skill tool:\n\n- [\s\S]*\n\n<total_tokens>\d+ tokens left<\/total_tokens>$/
 function systemContext(text) {
-  if (SYSTEM_TOKEN_OPENING.test(text)) return announcedContext(text)
+  if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
   if (HOOK_OUTPUT.test(text)) {
     const at = text.indexOf(HOOK_CONTEXT)
     return at < 0 ? text : text.slice(0, at + 1) + generatedContext(text.slice(at + 1))
@@ -663,7 +666,7 @@ function systemContext(text) {
 }
 
 // Claude Code also announces several reminders as one system turn, with
-// a token marker first and no system-reminder wrappers. Only known metadata
+// token context and no system-reminder wrappers. Only known metadata
 // paragraphs change; numbered file contents and the hook's own output stay.
 function announcedContext(text) {
   const parts = text.split("\n\n")
@@ -735,7 +738,7 @@ const COMPACT_READ = /^<system-reminder>\nCalled the Read tool with the followin
 const COMPACT_FILE = /^<system-reminder>\nNote: ([^\n]+) was read before the last conversation was summarized, but the contents are too large to include\. Use Read tool if you need to access it\.\n<\/system-reminder>$/
 function compactContext(text) {
   // A translating gateway can fold an announced system turn into user text.
-  if (SYSTEM_TOKEN_OPENING.test(text)) return announcedContext(text)
+  if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
   if (text.startsWith(COMPACT_HEADER)) return "Earlier conversation context is summarized below." + text.slice(COMPACT_OPENING.length)
   const read = text.match(COMPACT_READ)
   if (read) {

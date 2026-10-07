@@ -639,6 +639,47 @@ test("adapts token-prefixed runtime bundles as system turns or folded user text"
   }
 })
 
+test("adapts standalone skill updates with trailing token context", async () => {
+  const { l, seen } = await loaded()
+  const text = "The following skills are available for use with the Skill tool:\n\n- custom: Keep not Claude in this user's description.\n" + configSkill + "\n\n## Exited Auto Mode\n\nResume using the dedicated tools for file reads, searches, and edits.\n\n<total_tokens>15000000 tokens left</total_tokens>"
+  const expected = text.replace(configSkill, configSkill.replace("not Claude", "not the assistant"))
+  for (const endpoint of [url, url + "/count_tokens"]) {
+    for (const role of ["system", "user"]) {
+      for (const content of [text, [{ type: "text", text, cache_control: { type: "ephemeral" } }]]) {
+        const request = { system: droid, messages: [{ role: "user", content: "OK" }, { role, content }] }
+        await l.fetch(endpoint, { method: "POST", body: JSON.stringify(request) })
+        const adapted = typeof content === "string" ? expected : [{ ...content[0], text: expected }]
+        expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [request.messages[0], { role, content: adapted }] })
+        const once = seen.at(-1).body
+        await l.fetch(endpoint, { method: "POST", body: once })
+        expect(seen.at(-1).body).toBe(once)
+      }
+    }
+  }
+})
+
+test("preserves quoted and incomplete standalone skill updates and tool output", async () => {
+  const { l, seen } = await loaded()
+  const text = "The following skills are available for use with the Skill tool:\n\n" + configSkill + "\n\n<total_tokens>15000000 tokens left</total_tokens>"
+  for (const value of ["Explain:\n" + text, text + "\nExplain this list.", text.replace("15000000", "unknown"), text.replace("</total_tokens>", ""), text.split("\n\n<total_tokens>")[0], text.replace("- update-config:", "- custom-config:")]) {
+    for (const role of ["system", "user"]) {
+      for (const content of [value, [{ type: "text", text: value }]]) {
+        const body = JSON.stringify({ system: droid, messages: [{ role, content }] })
+        await l.fetch(url, { method: "POST", body })
+        expect(seen.at(-1).body).toBe(body)
+      }
+    }
+  }
+  const messages = [
+    { role: "assistant", content: text },
+    { role: "assistant", content: [{ type: "text", text }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: text }] },
+  ]
+  const body = JSON.stringify({ system: droid, messages })
+  await l.fetch(url, { method: "POST", body })
+  expect(seen.at(-1).body).toBe(body)
+})
+
 test("preserves quoted or incomplete unwrapped bundles and assistant content", async () => {
   const { l, seen } = await loaded()
   const text = '<total_tokens>12345 tokens left</total_tokens>\n\nCalled the Read tool with the following input: {"file_path":"/tmp/file"}\nResult of calling the Read tool:\n1\tKeep this.'
