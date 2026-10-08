@@ -118,12 +118,14 @@ The same model-update adaptation covers updates that start with the complete
 generated `# Environment update` block after a working-directory change.
 
 Claude Code's generated compaction summaries also have a fixed opening
-that Factory refuses. For a complete summary header, the adapter rephrases
-only its first sentence in user messages, including string and text-block
-content. The summary body and continuation instructions stay verbatim.
+that Factory refuses. The adapter recognizes the two generated opening
+sentences and rephrases only the first in user strings and text blocks,
+including summaries without a `Summary:` label. The generated artifact
+provenance marker and note, summary body and continuation instructions stay
+verbatim.
 Complete generated reminders for restored Read calls and omitted files are
-adapted too. Read arguments, file paths and the separate file-content blocks
-are preserved; quoted or incomplete reminders are left alone.
+adapted too. Read arguments and file paths are preserved; quoted or incomplete
+reminders are left alone.
 Claude Code can also combine reminders into a token-prefixed `system` turn
 without the reminder wrappers. The adapter handles the known metadata
 paragraphs in that form, including skill-list updates, while retaining
@@ -148,6 +150,10 @@ the string recovers the exact original output, including quotes, backslashes
 and Unicode; the plugin does not delete the output or replace its identities
 with different ones. Tool ids, cache/error markers and non-text blocks stay
 unchanged. Ordinary tool results are forwarded as before.
+The same lossless encoding applies to restored or `@`-attached Read file text
+after the exact `Result of calling the Read tool:` header, including complete
+reminder wrappers and announced runtime bundles. The generated header and
+wrapper stay intact. File text without a known refused phrase is unchanged.
 
 Use magpie's Claude Code integration to select the Factory provider.
 magpie manages the provider-specific client settings, including capability
