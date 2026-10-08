@@ -650,6 +650,9 @@ const SYSTEM_TOKEN_CONTEXT = /(?:^|\n\n)<total_tokens>\d+ tokens left<\/total_to
 // context in the same message (#634 and subagent startup). Adapt only the
 // environment suffix; keep the hook output and tool announcement verbatim.
 const HOOK_OUTPUT = /^(?:SessionStart|SubagentStart)(?::[^\n]* hook success:| hook additional context:)/
+// Other hook events can also own additional context inside a notification
+// bundle. This guard only stops rewriting; it does not adapt their output.
+const HOOK_NOTIFICATION = /^[A-Z][A-Za-z]*(?::[^\n]* hook success:| hook additional context:)/
 const DEFERRED_TOOLS_OPENING = 'The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query "select:<name>[,<name>...]" to load tool schemas before calling them:\n'
 const HOOK_CONTEXT = "\n# Environment\nYou have been invoked in the following environment:"
 const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n/
@@ -657,6 +660,7 @@ const SYSTEM_TOKEN_OPENING = /^<total_tokens>\d+ tokens left<\/total_tokens>\n\n
 // auto mode). Require the generated list opening and a complete token tail.
 const SYSTEM_SKILL_CONTEXT = /^The following skills are available for use with the Skill tool:\n\n- [\s\S]*\n\n<total_tokens>\d+ tokens left<\/total_tokens>$/
 function systemContext(text) {
+  text = changedFileContext(text)
   text = announcedSkills(text)
   if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
   if (HOOK_OUTPUT.test(text) || text.startsWith(DEFERRED_TOOLS_OPENING)) {
@@ -688,11 +692,16 @@ function announcedSkills(text) {
 // token context and no system-reminder wrappers. Only known metadata
 // paragraphs change; numbered file contents and the hook's own output stay.
 function announcedContext(text) {
-  const parts = text.split("\n\n")
+  const parts = changedFileContext(text).split(/\n\n(?!\.\.\. \[)/)
   const open = "<system-reminder>\n", close = "\n</system-reminder>"
   for (let i = 1; i < parts.length; i++) {
     const part = parts[i]
-    if (HOOK_OUTPUT.test(part)) break
+    if (HOOK_NOTIFICATION.test(part.replace(/^<system-reminder>\n/, ""))) break
+    const changedFile = changedFileText(part)
+    if (changedFile !== null) {
+      parts[i] = changedFile
+      continue
+    }
     const result = part.indexOf("\n" + READ_RESULT_HEADER)
     const heading = result < 0 ? part : part.slice(0, result)
     const wrapped = open + heading + close
@@ -749,7 +758,8 @@ const GLOBAL_INSTRUCTIONS = "(user's private global instructions for all project
 // Factory returns 403 for Claude Code's fixed compaction opening, even
 // without tools or other history. Match the two generated opening sentences,
 // including the provenance prefix, without requiring a Summary label. Keep
-// the provenance, summary and continuation instructions verbatim. File
+// the provenance verbatim. A summary that quotes the opening needs lossless
+// encoding too, including its transcript path and continuation instructions. File
 // reminders restored after compaction need the same narrow adaptation;
 // their paths and read arguments stay intact; refused file text is quoted
 // losslessly below.
@@ -765,8 +775,16 @@ function compactContext(text) {
   if (HOOK_OUTPUT.test(text) || text.startsWith(DEFERRED_TOOLS_OPENING)) return systemContext(text)
   const result = readResultText(text)
   if (result !== null) return result
+  const changedFile = text.startsWith("<system-reminder>\n") ? changedFileText(text) : null
+  if (changedFile !== null) return changedFile
   const prefix = text.match(COMPACT_ARTIFACT)?.[0] ?? ""
-  if (text.startsWith(COMPACT_HEADER, prefix.length)) return prefix + "Earlier conversation context is summarized below." + text.slice(prefix.length + COMPACT_OPENING.length)
+  if (text.startsWith(COMPACT_HEADER, prefix.length)) {
+    const context = text.slice(prefix.length + COMPACT_HEADER.length)
+    const header = prefix + COMPACT_HEADER.replace(COMPACT_OPENING, "Earlier conversation context is summarized below.")
+    return header + (context.includes(COMPACT_OPENING)
+      ? "\n\n" + quotedToolText(context, "Conversation context encoded as a JSON string. Decode the JSON string to recover the exact original context before continuing:\n")
+      : context)
+  }
   const read = text.match(COMPACT_READ)
   if (read) {
     try {
@@ -789,13 +807,43 @@ function readResultText(text) {
   return prefix + quotedToolText(content) + suffix
 }
 
+// Claude Code's edited_text_file attachment reports current file lines,
+// not a unified diff. Keep its path and instructions; quote only the lines.
+const CHANGED_FILE_HEADER = /^Note: [^\n]+ changed on disk since you last read it\. That's usually deliberate, so take it as the current state rather than reverting it; if the change looks wrong, say so rather than undoing it yourself — otherwise no need to call it out\. Here are the relevant changes \(shown with line numbers\):\n/
+function changedFileText(text) {
+  const open = "<system-reminder>\n", close = "\n</system-reminder>"
+  const wrapped = text.startsWith(open)
+  if (wrapped && !text.endsWith(close)) return null
+  const content = wrapped ? text.slice(open.length, -close.length) : text
+  const header = content.match(CHANGED_FILE_HEADER)?.[0]
+  if (!header) return null
+  const lines = content.slice(header.length)
+  if (!/^\d+[\t:][^\n]*(?:\n(?:\.\.\.\n)?\d+[\t:][^\n]*)*(?:\n\n\.\.\. \[\d+ lines truncated\] \.\.\.)?$/.test(lines)) return null
+  return (wrapped ? open : "") + header + quotedToolText(lines) + (wrapped ? close : "")
+}
+
+// System-turn notifications may start with the changed file, or put it
+// among other notifications before the final token marker. Hook output is
+// owned by the hook, even when it quotes a complete generated notification.
+function changedFileContext(text) {
+  // Keep even an incomplete truncation tail with its snippet, so the
+  // complete-notification check can reject it rather than encode a fragment.
+  const parts = text.split(/\n\n(?!\.\.\. \[)/)
+  if (changedFileText(parts[0]) === null && !SYSTEM_TOKEN_OPENING.test(text) && !/(?:^|\n\n)<total_tokens>\d+ tokens left<\/total_tokens>$/.test(text)) return text
+  for (let i = 0; i < parts.length; i++) {
+    if (HOOK_NOTIFICATION.test(parts[i].replace(/^<system-reminder>\n/, ""))) break
+    parts[i] = changedFileText(parts[i]) ?? parts[i]
+  }
+  return parts.join("\n\n")
+}
+
 // Factory also refuses these fixed client phrases when they are quoted in
 // tool output, e.g. while reading this adapter's source. Keep the original
 // text recoverable: a JSON string with explicit decoding instructions,
 // rather than deleting or rewriting the file's contents. Other output and
 // the tool's id, error/cache markers and non-text blocks stay untouched.
 const QUOTED_TOOL_PREFIX = "Tool output encoded as a JSON string. Decode the JSON string to recover the exact original text before using it:\n"
-function quotedToolText(text) {
+function quotedToolText(text, prefix = QUOTED_TOOL_PREFIX) {
   if (![...CLAUDE_IDENTITIES].some((identity) => text.includes(identity)) &&
       !text.includes("You have been invoked in the following environment:") &&
       !text.includes("x-anthropic-billing-header: cc_version=") &&
@@ -804,7 +852,7 @@ function quotedToolText(text) {
   for (const phrase of ["You are", "You have", "x-anthropic-billing-header", "system-reminder", COMPACT_OPENING]) {
     encoded = encoded.replaceAll(phrase, "\\u" + phrase.charCodeAt(0).toString(16).padStart(4, "0") + phrase.slice(1))
   }
-  return QUOTED_TOOL_PREFIX + encoded
+  return prefix + encoded
 }
 
 function anthropicBody(body) {
