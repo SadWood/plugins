@@ -694,10 +694,15 @@ function announcedSkills(text) {
 function announcedContext(text) {
   const parts = changedFileContext(text).split(/\n\n(?!\.\.\. \[)/)
   const open = "<system-reminder>\n", close = "\n</system-reminder>"
+  let quoteChangedFiles = true
   for (let i = 1; i < parts.length; i++) {
     const part = parts[i]
-    if (HOOK_NOTIFICATION.test(part.replace(/^<system-reminder>\n/, ""))) break
-    const changedFile = changedFileText(part)
+    const hook = part.replace(/^<system-reminder>\n/, "")
+    if (HOOK_OUTPUT.test(hook)) break
+    // Any hook owns its file snippets. Non-startup hooks do not stop the
+    // existing adaptation of model/environment metadata that follows them.
+    if (HOOK_NOTIFICATION.test(hook)) quoteChangedFiles = false
+    const changedFile = quoteChangedFiles ? changedFileText(part) : null
     if (changedFile !== null) {
       parts[i] = changedFile
       continue
@@ -705,7 +710,7 @@ function announcedContext(text) {
     const result = part.indexOf("\n" + READ_RESULT_HEADER)
     const heading = result < 0 ? part : part.slice(0, result)
     const wrapped = open + heading + close
-    const compacted = compactContext(wrapped)
+    const compacted = compactContext(wrapped, quoteChangedFiles)
     if (compacted !== wrapped) {
       parts[i] = compacted.slice(open.length, -close.length) + (result < 0 ? "" : "\n" + readResultText(part.slice(result + 1)))
     } else if (SYSTEM_ENV_CONTEXT.test(part + "\n")) {
@@ -758,10 +763,10 @@ const GLOBAL_INSTRUCTIONS = "(user's private global instructions for all project
 // Factory returns 403 for Claude Code's fixed compaction opening, even
 // without tools or other history. Match the two generated opening sentences,
 // including the provenance prefix, without requiring a Summary label. Keep
-// the provenance verbatim. A summary that quotes the opening needs lossless
-// encoding too, including its transcript path and continuation instructions. File
-// reminders restored after compaction need the same narrow adaptation;
-// their paths and read arguments stay intact; refused file text is quoted
+// the provenance verbatim. A summary that quotes refused client metadata
+// needs lossless encoding too, including its transcript path and continuation
+// instructions. File reminders restored after compaction need the same narrow
+// adaptation; their paths and read arguments stay intact; refused file text is quoted
 // losslessly below.
 const COMPACT_OPENING = "This session is being continued from a previous conversation that ran out of context."
 const COMPACT_HEADER = COMPACT_OPENING + " The summary below covers the earlier portion of the conversation."
@@ -769,21 +774,20 @@ const COMPACT_ARTIFACT = /^<artifact-content-authored-by-others\/>\nThe summariz
 const READ_RESULT_HEADER = "Result of calling the Read tool:\n"
 const COMPACT_READ = /^<system-reminder>\nCalled the Read tool with the following input: (\{[^\n]*\})\n<\/system-reminder>$/
 const COMPACT_FILE = /^<system-reminder>\nNote: ([^\n]+) was read before the last conversation was summarized, but the contents are too large to include\. Use Read tool if you need to access it\.\n<\/system-reminder>$/
-function compactContext(text) {
+function compactContext(text, quoteChangedFiles = true) {
   // A translating gateway can fold an announced system turn into user text.
   if (SYSTEM_TOKEN_OPENING.test(text) || SYSTEM_SKILL_CONTEXT.test(text)) return announcedContext(text)
   if (HOOK_OUTPUT.test(text) || text.startsWith(DEFERRED_TOOLS_OPENING)) return systemContext(text)
   const result = readResultText(text)
   if (result !== null) return result
-  const changedFile = text.startsWith("<system-reminder>\n") ? changedFileText(text) : null
+  const changedFile = quoteChangedFiles && text.startsWith("<system-reminder>\n") ? changedFileText(text) : null
   if (changedFile !== null) return changedFile
   const prefix = text.match(COMPACT_ARTIFACT)?.[0] ?? ""
   if (text.startsWith(COMPACT_HEADER, prefix.length)) {
     const context = text.slice(prefix.length + COMPACT_HEADER.length)
     const header = prefix + COMPACT_HEADER.replace(COMPACT_OPENING, "Earlier conversation context is summarized below.")
-    return header + (context.includes(COMPACT_OPENING)
-      ? "\n\n" + quotedToolText(context, "Conversation context encoded as a JSON string. Decode the JSON string to recover the exact original context before continuing:\n")
-      : context)
+    const quoted = quotedToolText(context, "Conversation context encoded as a JSON string. Decode the JSON string to recover the exact original context before continuing:\n")
+    return header + (quoted === context ? context : "\n\n" + quoted)
   }
   const read = text.match(COMPACT_READ)
   if (read) {
@@ -818,7 +822,7 @@ function changedFileText(text) {
   const header = content.match(CHANGED_FILE_HEADER)?.[0]
   if (!header) return null
   const lines = content.slice(header.length)
-  if (!/^\d+[\t:][^\n]*(?:\n(?:\.\.\.\n)?\d+[\t:][^\n]*)*(?:\n\n\.\.\. \[\d+ lines truncated\] \.\.\.)?$/.test(lines)) return null
+  if (!/^\d+[\t:][^\n]*(?:\n(?:\.\.\.\n)?\d+[\t:][^\n]*)*(?:(?:\n\.\.\.)?\n\n\.\.\. \[\d+ lines truncated\] \.\.\.)?$/.test(lines)) return null
   return (wrapped ? open : "") + header + quotedToolText(lines) + (wrapped ? close : "")
 }
 

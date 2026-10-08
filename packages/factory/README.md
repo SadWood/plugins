@@ -121,11 +121,11 @@ Claude Code's generated compaction summaries also have a fixed opening
 that Factory refuses. The adapter recognizes the two generated opening
 sentences and rephrases only the first in user strings and text blocks,
 including summaries without a `Summary:` label. The generated artifact
-provenance marker and note stay verbatim. If the summary itself quotes the
-refused opening, the context after the two opening sentences is encoded as
-a JSON string with explicit decoding instructions. Decoding restores the
-exact summary, transcript path and continuation instructions; context without
-that quote stays verbatim.
+provenance marker and note stay verbatim. If the summary itself quotes any
+of the refused client phrases handled in tool output, the context after the
+two opening sentences is encoded as a JSON string with explicit decoding
+instructions. Decoding restores the exact summary, transcript path and
+continuation instructions; context without those phrases stays verbatim.
 Complete generated reminders for restored Read calls and omitted files are
 adapted too. Read arguments and file paths are preserved; quoted or incomplete
 reminders are left alone.
@@ -162,8 +162,9 @@ only the numbered file snippet is encoded, retaining its TAB or colon line
 separators, hunk separators and truncation notice. The path and instructions
 about respecting the current file stay verbatim. This covers wrapped user
 attachments and generated system bundles, including notifications before a
-token marker. Hook-owned text, quoted or incomplete notifications, and notices
-that omit the snippet are left alone.
+token marker. Changed-file text supplied by hooks, quoted or incomplete
+notifications, and notices that omit the snippet are left alone. Model and
+environment metadata after non-startup hooks retain their existing adaptation.
 
 Use magpie's Claude Code integration to select the Factory provider.
 magpie manages the provider-specific client settings, including capability

@@ -678,6 +678,41 @@ test("losslessly quotes compaction context that repeats the opening in its body"
   }
 })
 
+test("losslessly quotes other refused client phrases in compaction context", async () => {
+  const { l, seen } = await loaded()
+  const opening = "This session is being continued from a previous conversation that ran out of context."
+  const header = opening + " The summary below covers the earlier portion of the conversation."
+  const phrases = [
+    "You are Claude Code, Anthropic's official CLI for Claude.",
+    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+    "You have been invoked in the following environment:",
+    "x-anthropic-billing-header: cc_version=2.1.292; cc_entrypoint=cli;",
+  ]
+  for (const phrase of phrases) {
+    const context = '\n\nSummary:\nThe source contains "' + phrase + '". Keep 中文, \\u0059 and /tmp/history.jsonl.\nContinue the original task.'
+    const text = header + context
+    for (const endpoint of [url, url + "/count_tokens"]) {
+      for (const content of [text, [{ type: "text", text, cache_control: { type: "ephemeral" } }]]) {
+        const request = { system: droid, messages: [{ role: "user", content }] }
+        await l.fetch(endpoint, { method: "POST", body: JSON.stringify(request) })
+        const got = JSON.parse(seen.at(-1).body).messages[0].content
+        const out = typeof got === "string" ? got : got[0].text
+        const start = header.replace(opening, "Earlier conversation context is summarized below.") + "\n\n"
+        expect(out).toStartWith(start)
+        expect(out).not.toContain(phrase)
+        const encoded = out.slice(start.length)
+        expect(encoded).toStartWith("Conversation context encoded as a JSON string.")
+        expect(JSON.parse(encoded.slice(encoded.indexOf("\n") + 1))).toBe(context)
+        expect(got).toEqual(typeof content === "string" ? out : [{ ...content[0], text: out }])
+        const once = seen.at(-1).body
+        await l.fetch(endpoint, { method: "POST", body: once })
+        expect(seen.at(-1).body).toBe(once)
+      }
+    }
+  }
+})
+
 test("losslessly quotes restored and attached Read results in user text", async () => {
   const { l, seen } = await loaded()
   const header = "Result of calling the Read tool:\n"
@@ -741,7 +776,7 @@ test("losslessly quotes changed-file attachments while preserving their notice a
   const source = '1\t' + JSON.stringify({ role: "user", content: opening + ' The summary below covers the earlier portion of the conversation.\n\nSummary:\nKeep 中文 😀, "quotes", \\u0054 and /tmp/示例.jsonl.' }) + '\n2\t\n3\t' + opening
   // Tab-indented hunks can use a colon; separate hunks retain their own
   // separator and oldStart numbering. Truncation adds an unnumbered tail.
-  for (const lines of [source, '1:\t' + opening, source + '\n...\n15:\t' + opening, source + '\n\n... [1 lines truncated] ...']) {
+  for (const lines of [source, '1:\t' + opening, source + '\n...\n15:\t' + opening, source + '\n\n... [1 lines truncated] ...', source + '\n...\n\n... [2 lines truncated] ...']) {
     for (const [role, before, after] of [["user", "<system-reminder>\n", "\n</system-reminder>"], ["system", "", ""], ["system", "<system-reminder>\n", "\n</system-reminder>"]]) {
       const text = before + changedFileHeader + lines + after
       for (const endpoint of [url, url + "/count_tokens"]) {
@@ -788,6 +823,33 @@ test("quotes changed-file lines in generated system bundles and token-prefixed u
         const once = seen.at(-1).body
         await l.fetch(endpoint, { method: "POST", body: once })
         expect(seen.at(-1).body).toBe(once)
+      }
+    }
+  }
+})
+
+test("adapts metadata after non-startup hooks while preserving their changed-file text", async () => {
+  const { l, seen } = await loaded()
+  const token = "<total_tokens>100 tokens left</total_tokens>"
+  const file = changedFileHeader + '1\tThis session is being continued from a previous conversation that ran out of context.'
+  const model = "You are powered by the model named Opus 5.5. The exact model ID is factory/claude-opus-5-5. Assistant knowledge cutoff is June 2026."
+  const environment = "# Environment\nYou have been invoked in the following environment:\n - Primary working directory: /tmp/project\n - Platform: darwin"
+  for (const [hook, metadata, adapted] of [
+    ["UserPromptSubmit hook additional context: keep", model, "Current model name: Opus 5.5. Model ID: factory/claude-opus-5-5. Model knowledge cutoff: June 2026."],
+    ["PostToolUse:Edit hook success: ok", environment, "# Runtime context\nThe session environment is:\n - Primary working directory: /tmp/project\n - Platform: darwin"],
+  ]) {
+    const text = [token, hook, metadata, file].join("\n\n")
+    const expected = [token, hook, adapted, file].join("\n\n")
+    for (const endpoint of [url, url + "/count_tokens"]) {
+      for (const role of ["user", "system"]) {
+        for (const content of [text, [{ type: "text", text, cache_control: { type: "ephemeral" } }]]) {
+          const request = { system: droid, messages: [{ role, content }] }
+          await l.fetch(endpoint, { method: "POST", body: JSON.stringify(request) })
+          expect(JSON.parse(seen.at(-1).body)).toEqual({ ...request, messages: [{ role, content: typeof content === "string" ? expected : [{ ...content[0], text: expected }] }] })
+          const once = seen.at(-1).body
+          await l.fetch(endpoint, { method: "POST", body: once })
+          expect(seen.at(-1).body).toBe(once)
+        }
       }
     }
   }
