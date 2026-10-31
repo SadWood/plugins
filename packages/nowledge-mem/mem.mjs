@@ -42,6 +42,13 @@ export function resolveOptions(raw = {}, env = process.env) {
             throw new MemFailure("invalid");
         return value;
     };
+    const captureFilter = raw.captureFilter === undefined ? "off" : raw.captureFilter;
+    if (captureFilter !== "off" && captureFilter !== "human")
+        throw new MemFailure("invalid");
+    const captureCindyAgents = raw.captureCindyAgents === undefined ? [] : raw.captureCindyAgents;
+    if (!Array.isArray(captureCindyAgents) || captureCindyAgents.length > 20 ||
+        captureCindyAgents.some((agent) => typeof agent !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/u.test(agent)))
+        throw new MemFailure("invalid");
     // The Mem endpoint, as its own clients resolve it: the option, then the
     // portable NMEM_API_URL, then the local desktop default. A URL from the
     // environment that isn't an HTTP(S) address is ignored rather than fatal.
@@ -91,6 +98,7 @@ export function resolveOptions(raw = {}, env = process.env) {
         contextBundle: bool("contextBundle", true),
         capture: bool("capture", false),
         captureTools: bool("captureTools", true),
+        captureFilter, captureCindyAgents: [...new Set(captureCindyAgents)],
         maxMemories: integer("maxMemories", 5, 1, 20),
         maxBytes: integer("maxBytes", 6000, 512, 32768),
         requestTimeoutMs: integer("requestTimeoutMs", 1500, 50, 5000),

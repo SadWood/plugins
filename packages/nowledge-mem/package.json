@@ -9,6 +9,9 @@
     "mem.mjs",
     "nowledge-mem.hooks.mjs",
     "conversation.mjs",
+    "capture-filter.mjs",
+    "cindy-capture.mjs",
+    "CAPTURE_FILTER.md",
     "README.md",
     "page"
   ],
@@ -37,6 +40,8 @@
       "recallBackoffMs": 30000,
       "capture": false,
       "captureTools": true,
+      "captureFilter": "off",
+      "captureCindyAgents": [],
       "port": 3479
     },
     "page": {

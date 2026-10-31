@@ -132,6 +132,13 @@ derived value for all of them.
   Set `"capture": true` explicitly to opt in.
 - `captureTools`: default **true**. Include client tool results as `tool`
   messages. Turn it off to import only what the user and the assistant wrote.
+- `captureFilter`: `"off"` (default, existing behavior) or `"human"`. Human
+  mode retains user/assistant text including tool-adjacent commentary and omits
+  tool messages, taking precedence over `captureTools`.
+- `captureCindyAgents`: default `[]`. Exact Magpie agent IDs whose complete
+  leading Cindy user-text notes may be cleaned in human mode. Explicit opt-in;
+  no automatic host detection. See [capture filtering](CAPTURE_FILTER.md) for
+  configuration, identity guarantees, tests and native-session limitations.
 - `allowInsecureHttp`: default **false**. Permits plain HTTP to a server that
   is not a loopback address. Prefer HTTPS.
 - `port`: the loopback port of the page's connection test, default 3479. Change
@@ -199,7 +206,10 @@ not a guarantee. Each Thread import is one bounded request; conversations over
 not sent twice. A failed import fails open and is not retried blindly.
 
 `capture` is the only switch that exports conversation content. Recall works
-without it.
+without it. `captureFilter` only changes the exported copy, not the model
+request or reply. New human-mode titles use the surviving user text; existing
+saved messages are not migrated or deleted. The raw credential and completion
+checks run before filtering. [Details and Cindy opt-in](CAPTURE_FILTER.md).
 
 ## Tools: Mem's own MCP server
 

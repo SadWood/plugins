@@ -20,6 +20,7 @@
 // provider's prompt cache keeps working. Anything that goes wrong leaves the
 // request as it came.
 import { resolve } from "node:path";
+import { captureMessage } from "./capture-filter.mjs";
 import { conversation as transcript, history, notice, open, close } from "./conversation.mjs";
 import { MemFailure as Failure, resolveOptions, request, serviceKey, sha256, trimText, utf8, version } from "./mem.mjs";
 const maxQuery = 2000;
@@ -395,9 +396,11 @@ async function capture(reply, ctx, state) {
     // Credentials anywhere in the conversation stop the whole capture.
     if (hasSecret(captured.messages))
         return;
-    const messages = importMessages(captured.messages, state);
-    if (!messages.length)
+    const messages = importMessages(captured.messages, state, ctx.agent);
+    if (!messages.length || (state.o.captureFilter === "human" && !messages.some((m) => m.role === "user"))) {
+        ctx.report?.("empty");
         return;
+    }
     const content = JSON.stringify(messages);
     if (utf8(content) > maxImport) {
         ctx.report?.("skipped");
@@ -420,7 +423,8 @@ async function capture(reply, ctx, state) {
         metadata.agent = ctx.agent;
     const payload = {
         thread_id: state.threadId,
-        title: state.title || titleOf(messages),
+        title: state.o.captureFilter === "human"
+            ? titles.get(state.threadId) ?? titleOf(messages) : state.title || titleOf(messages),
         source: "magpie",
         messages,
         metadata,
@@ -446,15 +450,18 @@ async function capture(reply, ctx, state) {
 // importMessages keeps what a person and the assistant wrote. Client tool
 // results follow when captureTools is on; tool-only assistant steps and our
 // own recalled blocks are not messages of the conversation.
-function importMessages(messages, state) {
+function importMessages(messages, state, agent) {
     const out = [];
     messages.forEach((message, index) => {
-        const content = message.content.trim();
-        if (!content)
+        const projected = captureMessage(message, state.o, agent);
+        if (!projected)
             return;
-        if (!state.o.captureTools && (message.role === "tool" || message.tool_calls?.length))
-            return;
-        const metadata = { external_id: `magpie:${sha256(state.threadId, String(index), message.role, content).slice(0, 24)}` };
+        const { content } = projected;
+        // Identity is the original occurrence, not the filtered array position
+        // or cleaned text. Replays and mode changes must not renumber messages.
+        const metadata = { external_id: `magpie:${sha256(state.threadId, String(index), message.role, message.content.trim()).slice(0, 24)}` };
+        if (projected.cindyOrigin)
+            metadata.cindy_origin = projected.cindyOrigin;
         if (message.role === "tool") {
             if (message.name)
                 metadata.tool_name = message.name;
